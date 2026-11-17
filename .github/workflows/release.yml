@@ -1,0 +1,61 @@
+name: release
+on:
+  workflow_run:
+    workflows: [check]
+    types: [completed]
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+environment: production
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push')
+
+    env:
+      DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || github.ref_name != 'main' }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/setup@v3
+        with:
+          cache: true
+
+      - run: pnpm check
+
+      - uses: ryangarber/rylease@v3
+        with:
+          dry-run: ${{ env.DRY_RUN }}
+          scheme:
+            uses: calver
+            with: { format: YYYY.MM.MICRO, timezone: America/New_York }
+          history: git/tags
+          steps:
+            - uses: conventional
+            - uses: exec/command
+              if: "!dryRun"
+              with:
+                command: bash ./scripts/deploy.sh
+                phase: release
+                env:
+                  SSH_HOST: ${{ secrets.SSH_HOST }}
+                  SSH_USER: ${{ secrets.SSH_USER }}
+                  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+                  SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
+                  SSH_PORT: ${{ vars.SSH_PORT || '22' }}
+                  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/var/www/ryangarber.dev' }}
